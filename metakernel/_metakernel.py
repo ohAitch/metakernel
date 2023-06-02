@@ -310,7 +310,7 @@ class MetaKernel(Kernel):
     # Implement base class methods
 
     def do_execute(self, code, silent=False, store_history=True, user_expressions=None,
-                   allow_stdin=False):
+                         allow_stdin=False):
         """Handle code execution.
 
         https://jupyter-client.readthedocs.io/en/stable/messaging.html#execute
@@ -396,6 +396,17 @@ class MetaKernel(Kernel):
             else:
                 retval = self.do_execute_direct(code)
 
+        if inspect.isawaitable(retval):
+            #XXX to not break sync tests, only return promise if we got passed one
+            async def then():
+                self.post_execute(await retval, code, silent)
+
+                if 'payload' in self.kernel_resp:
+                    self.kernel_resp['payload'] = self.payload
+
+                return self.kernel_resp
+            return then()
+        
         self.post_execute(retval, code, silent)
 
         if 'payload' in self.kernel_resp:
@@ -858,12 +869,16 @@ class MetaKernelApp(IPKernelApp):
                 self.argv = argv
 
             def start(self):
-                kernel_spec = self.kernel_class().kernel_json
+                instance = self.kernel_class()
+                kernel_spec = instance.kernel_json
                 with TemporaryDirectory() as td:
                     dirname = os.path.join(td, kernel_spec['name'])
                     os.mkdir(dirname)
                     with open(os.path.join(dirname, 'kernel.json'), 'w') as f:
                         json.dump(kernel_spec, f, sort_keys=True)
+                    if hasattr(instance, 'kernel_javascript') and instance.kernel_javascript.strip():
+                        with open(os.path.join(dirname, 'kernel.js'), 'w') as f:
+                            f.write(instance.kernel_javascript)
                     filenames = ['logo-64x64.png', 'logo-32x32.png']
                     name = self.kernel_class.__module__
                     for filename in filenames:
